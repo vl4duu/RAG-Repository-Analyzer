@@ -98,4 +98,4 @@ def chunk_repository_files(repo_files, max_tokens=500):
 
                 })
 
-    return textual_chunks, code_chunks
+    return {'textual_chunks' : textual_chunks, 'code_chunks' : code_chunks}

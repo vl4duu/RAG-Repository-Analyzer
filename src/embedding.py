@@ -18,7 +18,10 @@ def embed_textual_metadata(content):
     try:
         response = client.embeddings.create(model="text-embedding-ada-002",  # Updated OpenAI's text embedding model
         input=content)
+
+        embedding = response.data[0].embedding
         return response.data[0].embedding
+
     except Exception as e:
         print(f"An error occurred while embedding text: {e}")
         raise
@@ -44,4 +47,6 @@ def generate_code_embedding(code_snippet):
         outputs = model(**inputs)
         # Take the mean of the embeddings across all tokens
         embedding = outputs.last_hidden_state.mean(dim=1)
-    return embedding.numpy().tolist()
+        embedding_np = embedding.numpy().tolist()
+
+    return embedding.numpy()
