@@ -15,6 +15,10 @@ def setup_chroma_collections(chunked_docs, embedded_chunks, batch_size=1000):
         """
 
     client = chromadb.Client()  # Create the client only once
+
+    client.delete_collection(name="text_collection")
+    client.delete_collection(name="code_collection")
+
     text_collection = client.get_or_create_collection(name="text_collection")
     code_collection = client.get_or_create_collection(name="code_collection")
     # Add to ChromaDB (separate collections)
