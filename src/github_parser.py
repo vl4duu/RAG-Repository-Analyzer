@@ -9,14 +9,12 @@ load_dotenv()
 g = Github(os.getenv("GITHUB_API_KEY"))
 
 
-def get_repo_files(repo_path, file_types=(".md", ".txt", ".py", ".json", ".js", ".html", ".tsx")):
+def get_repo_files(repo_path):
     """
     Parse the repository and extract content from the specified file types.
 
     Args:
         repo_path: GitHub repository path in the format username/repo_name.
-        file_types: Tuple of file extensions to include in the dataset.
-
     Returns:
             data List of dictionaries with textual files' data.
     """
@@ -78,7 +76,7 @@ def chunk_repository_files(repo_files, max_tokens=500):
         file_name = file["file_name"]
 
         # Determine whether the file is textual or code based on its extension
-        if file_name.endswith((".md", ".txt")):  # Textual data extensions
+        if file_name.endswith((".md", ".txt", ".xml")):  # Textual data extensions
             # Split content into chunks for textual data
             words = content.split()
             for i in range(0, len(words), max_tokens):
@@ -87,7 +85,7 @@ def chunk_repository_files(repo_files, max_tokens=500):
                     "content": " ".join(words[i:i + max_tokens])
                 })
 
-        elif file_name.endswith((".py", ".js", ".java", ".html")):  # Code data extensions
+        if file_name.endswith((".py", ".js", ".java", ".html", '.xml')):  # Code data extensions
             # Split content into chunks for code data
             words = content.split()
             for i in range(0, len(words), max_tokens):

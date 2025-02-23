@@ -1,9 +1,18 @@
 import chromadb
 
 
-def setup_chroma_collections(chunked_docs, embedded_chunks):
-    text_dir = "./chromaDB/text/collection/"
-    code_dir = "./chromaDB/code/collection/"
+def setup_chroma_collections(chunked_docs, embedded_chunks, batch_size=1000):
+    """Sets up ChromaDB collections for textual and code chunks.
+
+        Args:
+            client: The ChromaDB client instance.
+            chunked_docs: Dictionary containing textual and code chunks.
+            embedded_chunks: Dictionary containing textual and code embeddings.
+            batch_size: The batch size for adding documents (default is 1000).
+
+        Returns:
+            A dictionary containing the textual and code collections.
+        """
 
     client = chromadb.Client()  # Create the client only once
     text_collection = client.get_or_create_collection(name="text_collection")
