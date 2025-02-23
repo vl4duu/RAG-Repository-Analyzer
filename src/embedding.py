@@ -2,25 +2,25 @@ from transformers import AutoTokenizer, AutoModel
 import torch
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
 
 def embed_textual_metadata(content):
     """
        Embeds textual metadata using the OpenAI embedding model.
        """
     try:
-        response = client.embeddings.create(model="text-embedding-ada-002",  # Updated OpenAI's text embedding model
-        input=content)
+        response = openai.Embedding.create(model="text-embedding-ada-002",  # Updated OpenAI's text embedding model
+                                           input=content)
 
         return response.data[0].embedding
 
     except Exception as e:
         print(f"An error occurred while embedding text: {e}")
         raise
-
 
 
 # # Embed a README or docstring

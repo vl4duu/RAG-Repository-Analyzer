@@ -16,8 +16,11 @@ def setup_chroma_collections(chunked_docs, embedded_chunks, batch_size=1000):
 
     client = chromadb.Client()  # Create the client only once
 
-    client.delete_collection(name="text_collection")
-    client.delete_collection(name="code_collection")
+    try:
+        client.delete_collection(name="text_collection")
+        client.delete_collection(name="code_collection")
+    except Exception as e:
+        print(f"Warning: Could not delete 'code_collection'. Error: {e}")
 
     text_collection = client.get_or_create_collection(name="text_collection")
     code_collection = client.get_or_create_collection(name="code_collection")
@@ -38,6 +41,6 @@ def setup_chroma_collections(chunked_docs, embedded_chunks, batch_size=1000):
             ids=[f"{doc['file_name']}_{idx}"],
             embeddings=embedded_chunks["code_embeddings"][idx].tolist()  # corrected to tolist()
         )
- # Removed extra brackets
+    # Removed extra brackets
 
     return {'textual_collection': text_collection, 'code_collection': code_collection}
