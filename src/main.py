@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from models import (
+from .models import (
     AnalyzeRequest, AnalyzeResponse, QueryRequest, QueryResponse,
     AnalyzeAndQueryRequest, AnalyzeAndQueryResponse,
     HealthResponse, StatusResponse, ErrorResponse
