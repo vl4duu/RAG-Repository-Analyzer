@@ -115,31 +115,49 @@ class RAGService:
         Returns:
             Dictionary with answer and sources
         """
-        if not self.is_ready or not self.collections:
-            raise ValueError("No repository has been analyzed yet. Please analyze a repository first.")
+        logger.info(f"Query repository called with question: {question}")
+        logger.info(f"Service ready status: {self.is_ready}")
+        logger.info(f"Collections available: {self.collections is not None}")
+        
+        if not self.is_ready:
+            logger.error("Service is not ready - repository not analyzed")
+            raise ValueError("Repository analysis not completed. Service is not ready.")
+        
+        if not self.collections:
+            logger.error("Collections are None - ChromaDB setup failed")
+            raise ValueError("ChromaDB collections are not available. Repository analysis failed.")
         
         try:
             logger.info(f"Processing query: {question}")
             
             # Step 1: Retrieve relevant chunks
+            logger.info("Step 1: Retrieving relevant chunks...")
             relevant_chunks = await self._retrieve_relevant_chunks(question, top_k)
+            logger.info(f"Retrieved chunks: textual={len(relevant_chunks['textual'])}, code={len(relevant_chunks['code'])}")
             
             # Step 2: Construct RAG prompt
+            logger.info("Step 2: Constructing RAG prompt...")
             rag_prompt = self._construct_rag_prompt(question, relevant_chunks)
+            logger.info(f"RAG prompt constructed, length: {len(rag_prompt)}")
             
             # Step 3: Query AI model
+            logger.info("Step 3: Querying AI model...")
             ai_answer = await self._query_ai_model(rag_prompt)
+            logger.info(f"AI answer received, length: {len(ai_answer)}")
             
             # Step 4: Format sources
+            logger.info("Step 4: Formatting sources...")
             sources = self._format_sources(relevant_chunks)
+            logger.info(f"Sources formatted: {len(sources)} sources")
             
+            logger.info("Query processing completed successfully")
             return {
                 "answer": ai_answer,
                 "sources": sources
             }
             
         except Exception as e:
-            logger.error(f"Error processing query '{question}': {str(e)}")
+            logger.error(f"Error processing query '{question}': {str(e)}", exc_info=True)
             raise e
     
     async def _retrieve_relevant_chunks(self, query: str, top_k: int) -> Dict[str, List]:
