@@ -252,11 +252,16 @@ class RAGService:
         
         for chunk_type, chunks in relevant_chunks.items():
             for score, text, metadata in chunks:
+                file_name = metadata.get("file_name", "unknown")
                 sources.append({
-                    "file_name": metadata.get("file_name", "unknown"),
+                    # Original fields for backward compatibility
+                    "file_name": file_name,
+                    "content": text[:500] + "..." if len(text) > 500 else text,  # Keep original truncation
                     "content_type": metadata.get("content_type", chunk_type),
                     "score": float(score),
-                    "content": text[:500] + "..." if len(text) > 500 else text  # Truncate long content
+                    # New fields for frontend as requested in issue
+                    "fileName": file_name,  # Full file path for frontend
+                    "file_contents": text  # Full content without truncation for frontend
                 })
         
         return sources

@@ -161,9 +161,11 @@ async def query_repository(request: QueryRequest):
             sources=[
                 {
                     "file_name": source["file_name"],
+                    "fileName": source["fileName"],
                     "content_type": source["content_type"],
                     "score": source["score"],
-                    "content": source["content"]
+                    "content": source["content"],
+                    "file_contents": source["file_contents"]
                 }
                 for source in result["sources"]
             ]
@@ -231,9 +233,11 @@ async def analyze_and_query_repository(request: AnalyzeAndQueryRequest):
             sources=[
                 {
                     "file_name": source["file_name"],
+                    "fileName": source["fileName"],
                     "content_type": source["content_type"],
                     "score": source["score"],
-                    "content": source["content"]
+                    "content": source["content"],
+                    "file_contents": source["file_contents"]
                 }
                 for source in query_result["sources"]
             ],

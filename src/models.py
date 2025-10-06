@@ -18,9 +18,11 @@ class QueryRequest(BaseModel):
 
 class SourceInfo(BaseModel):
     file_name: str
+    fileName: str  # Added for frontend compatibility
     content_type: str
     score: float
     content: str
+    file_contents: str  # Added for frontend - full file contents
 
 
 class QueryResponse(BaseModel):
