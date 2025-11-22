@@ -5,6 +5,53 @@ from chromadb.config import Settings
 import mmh3
 
 
+def _disable_chroma_telemetry():
+    """Disable Chroma/PostHog telemetry to avoid noisy errors and network calls.
+
+    We see errors like:
+      "Failed to send telemetry event ... capture() takes 1 positional argument but 3 were given"
+
+    These originate from optional telemetry (PostHog) paths in chromadb. Some environments
+    may have an incompatible `posthog` installed or blocked network, causing noisy logs.
+
+    This helper:
+      - Sets env flags recognized by Chroma to disable telemetry
+      - Keeps client Settings with anonymized_telemetry=False
+      - Defensively monkey‑patches posthog.capture to a no‑op (accepts *args, **kwargs)
+
+    Telemetry can be re‑enabled by setting DISABLE_CHROMA_TELEMETRY=0.
+    """
+    disable = os.getenv("DISABLE_CHROMA_TELEMETRY", "1").lower() not in {"0", "false", "no"}
+    if not disable:
+        return
+
+    # Env flags recognized by different chroma versions
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
+    os.environ.setdefault("CHROMA_ANONYMIZED_TELEMETRY", "false")
+    os.environ.setdefault("CHROMA_TELEMETRY_IMPLEMENTATION", "disabled")
+    os.environ.setdefault("CHROMADB_TELEMETRY_IMPLEMENTATION", "disabled")
+
+    # Best‑effort defensive monkey‑patch in case posthog is importable
+    try:
+        import posthog  # type: ignore
+
+        def _noop_capture(*args, **kwargs):  # accepts any signature
+            return None
+
+        if hasattr(posthog, "capture"):
+            posthog.capture = _noop_capture  # type: ignore
+        # If a client instance is created somewhere, try to no‑op that too
+        if hasattr(posthog, "Posthog"):
+            try:
+                ph = posthog.Posthog()  # type: ignore
+                setattr(ph, "capture", _noop_capture)
+            except Exception:
+                pass
+    except Exception:
+        # If posthog isn't installed or anything goes wrong, silently ignore
+        pass
+
+
 def setup_chroma_collections(chunked_docs: Dict, embedded_chunks: Dict, batch_size: int = 1000):
     """Create/update persistent ChromaDB collections for textual and code chunks.
 
@@ -17,10 +64,16 @@ def setup_chroma_collections(chunked_docs: Dict, embedded_chunks: Dict, batch_si
         Dict with created collections {'textual_collection': ..., 'code_collection': ...}
     """
 
+    # Disable telemetry first to avoid PostHog/capture noise across chroma versions
+    _disable_chroma_telemetry()
+
     persist_dir = os.getenv("CHROMA_PERSIST_DIR", os.path.join(os.getcwd(), "data", "chroma"))
     os.makedirs(persist_dir, exist_ok=True)
 
-    client = chromadb.PersistentClient(path=persist_dir, settings=Settings(anonymized_telemetry=False))
+    client = chromadb.PersistentClient(
+        path=persist_dir,
+        settings=Settings(anonymized_telemetry=False)
+    )
 
     text_collection = client.get_or_create_collection(name="text_collection")
     code_collection = client.get_or_create_collection(name="code_collection")
