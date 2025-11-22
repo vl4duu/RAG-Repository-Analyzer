@@ -13,11 +13,11 @@ from pydantic import BaseModel
 import uvicorn
 from dotenv import load_dotenv
 
-# Add src directory to path
+# Add src directory to path (project root) so `src` package is importable
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.volume_aware_indexer import index_repository
-from src.rag_query import RepositoryRAG, format_response
+# Use the consolidated RAG service implementation
+from src.rag_service import RAGService
 
 load_dotenv()
 
@@ -27,18 +27,42 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configure CORS (dev-friendly defaults + env override)
+frontend_origins_env = os.getenv("FRONTEND_ORIGINS") or os.getenv("FRONTEND_ORIGIN")
+allow_all = os.getenv("API_ALLOW_ALL_ORIGINS", "false").lower() in {"1", "true", "yes"}
 
-# In-memory storage for indexed repositories
+default_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+if allow_all:
+    cors_kwargs = dict(
+        allow_origins=["*"],
+        # credentials cannot be used with wildcard origins
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    env_origins = (
+        [o.strip() for o in frontend_origins_env.split(",") if o.strip()]
+        if frontend_origins_env
+        else []
+    )
+    cors_kwargs = dict(
+        allow_origins=list({*default_origins, *env_origins}),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
+
+# In-memory storage for indexed repositories and active RAG services
+# `indexed_repositories` can carry lightweight metadata (e.g., volume_info) if available.
 indexed_repositories: Dict[str, Dict] = {}
-rag_instances: Dict[str, RepositoryRAG] = {}
+rag_instances: Dict[str, RAGService] = {}
 
 
 # Request/Response Models
@@ -113,30 +137,24 @@ async def index_repo(request: IndexRequest, background_tasks: BackgroundTasks):
             )
         
         print(f"Indexing repository: {repo_path}")
-        
-        # Index the repository
-        index_result = index_repository(
-            repo_path=repo_path,
-            use_langchain=request.use_langchain
-        )
-        
-        # Store the collections and create RAG instance
+
+        # Create and run the RAG service analysis for this repository
+        service = RAGService()
+        result = await service.analyze_repository(repo_path)
+
+        # Store service instance in memory for subsequent queries
+        rag_instances[repo_path] = service
+
+        # Optionally keep lightweight metadata placeholder (no detailed volume info at this time)
         indexed_repositories[repo_path] = {
-            "collections": index_result['collections'],
-            "volume_info": index_result.get('volume_info')
+            "volume_info": None
         }
-        
-        # Create RAG instance
-        rag_instances[repo_path] = RepositoryRAG(
-            collections=index_result['collections'],
-            use_conversation=True
-        )
-        
+
         return IndexResponse(
-            status="success",
-            message=f"Successfully indexed repository {repo_path}",
+            status=result.get("status", "success"),
+            message=result.get("message", f"Successfully indexed repository {repo_path}"),
             repo_path=repo_path,
-            volume_info=index_result.get('volume_info')
+            volume_info=indexed_repositories[repo_path].get("volume_info")
         )
         
     except Exception as e:
@@ -161,34 +179,26 @@ async def query_repo(request: QueryRequest):
     try:
         repo_path = request.repo_path
         
-        # Check if repository is indexed
-        if repo_path not in indexed_repositories:
+        # Check if repository is indexed (i.e., has an active service)
+        if repo_path not in rag_instances:
             raise HTTPException(
                 status_code=404,
                 detail=f"Repository {repo_path} is not indexed. Please index it first."
             )
-        
-        # Get RAG instance
-        rag = rag_instances.get(repo_path)
-        if not rag:
-            # Recreate RAG instance if missing
-            rag = RepositoryRAG(
-                collections=indexed_repositories[repo_path]['collections'],
-                use_conversation=True
-            )
-            rag_instances[repo_path] = rag
-        
-        # Query the repository
-        result = rag.query(
+
+        # Get RAG service and execute query
+        service = rag_instances[repo_path]
+        result = await service.query_repository(
             question=request.question,
-            use_both_collections=request.use_both_collections
+            top_k=3
         )
-        
+
+        # Map to existing response model. Put all sources into `all_sources` for frontend summarizer.
         return QueryResponse(
             answer=result.get("answer", ""),
-            textual_sources=result.get("textual_sources", []),
-            code_sources=result.get("code_sources", []),
-            all_sources=result.get("all_sources", [])
+            textual_sources=[],
+            code_sources=[],
+            all_sources=result.get("sources", [])
         )
         
     except HTTPException:
@@ -231,11 +241,11 @@ async def get_repository_status(repo_path: str):
     Returns:
         RepositoryStatus with indexing information
     """
-    if repo_path in indexed_repositories:
+    if repo_path in rag_instances:
         return RepositoryStatus(
             repo_path=repo_path,
             indexed=True,
-            volume_info=indexed_repositories[repo_path].get("volume_info")
+            volume_info=indexed_repositories.get(repo_path, {}).get("volume_info")
         )
     else:
         return RepositoryStatus(
@@ -256,10 +266,15 @@ async def delete_repository(repo_path: str):
     Returns:
         Success message
     """
-    if repo_path in indexed_repositories:
-        del indexed_repositories[repo_path]
-        if repo_path in rag_instances:
-            del rag_instances[repo_path]
+    if repo_path in indexed_repositories or repo_path in rag_instances:
+        # Clean up active service if present
+        service = rag_instances.pop(repo_path, None)
+        if service is not None:
+            try:
+                service.cleanup()
+            except Exception:
+                pass
+        indexed_repositories.pop(repo_path, None)
         return {"message": f"Repository {repo_path} removed successfully"}
     else:
         raise HTTPException(
@@ -280,8 +295,8 @@ async def clear_conversation_memory(repo_path: str):
         Success message
     """
     if repo_path in rag_instances:
-        rag_instances[repo_path].clear_memory()
-        return {"message": f"Conversation memory cleared for {repo_path}"}
+        # RAGService does not maintain conversation memory; act as a no-op for compatibility
+        return {"message": f"No conversation memory to clear for {repo_path}"}
     else:
         raise HTTPException(
             status_code=404,
