@@ -76,9 +76,15 @@ jupyterlab_pygments==0.3.0
 jupyterlab_server==2.27.3
 kubernetes==32.0.0
 langchain==0.3.18
+langchain-community==0.3.8
 langchain-core==0.3.34
+langchain-openai==0.2.4
 langchain-text-splitters==0.3.6
 langsmith==0.3.7
+tiktoken==0.8.0
+pytest==8.3.4
+pytest-mock==3.14.0
+pytest-cov==6.0.0
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
 matplotlib-inline==0.1.7

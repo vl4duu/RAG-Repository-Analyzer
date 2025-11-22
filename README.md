@@ -19,6 +19,33 @@ GITHUB_API_KEY="YOUR_GITHUB_API_KEY"
 ```
 1. **Run the Notebook:** Execute the `helper.ipynb` notebook. This will parse the specified GitHub repository, generate embeddings, create ChromaDB collections, and allow you to ask questions.
 
+## Frontend (Next.js App Router UI)
+A neo‑brutalist frontend lives in `./frontend`, built with Next.js 13+/16 App Router, TypeScript, and Tailwind CSS.
+
+Prerequisites:
+- Node.js >= 18.18.0 (Node 20+ recommended)
+
+Install and run in development:
+```bash
+cd frontend
+npm install
+npm run dev
+# The app will start at http://localhost:3000
+```
+
+Build and start production server:
+```bash
+cd frontend
+npm run build
+npm start
+# Serves the built app on http://localhost:3000
+```
+
+Notes:
+- Tailwind is preconfigured (see `frontend/tailwind.config.ts` and `frontend/app/globals.css`).
+- UI components are under `frontend/components/ui` (Button, Input).
+- Main page with input → processing → dashboard/chat flow is at `frontend/app/page.tsx`.
+
 ## Usage
 The `helper.ipynb` notebook provides a simple interface for querying the system. You can modify the `query` variable to test different questions. The system will return the AI's response based on the context found in the repository.
 ## Future Improvements
