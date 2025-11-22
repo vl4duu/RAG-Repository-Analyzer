@@ -31,6 +31,24 @@ export default function Page() {
   const [inputMsg, setInputMsg] = React.useState("");
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+    function resetToHome() {
+        setPhase("input");
+        setRepoUrl("");
+        setRepoPath("");
+        setProgress(0);
+        setLogs([]);
+        setTab("Chat");
+        setChat([
+            {
+                id: cryptoId(),
+                role: "system",
+                content:
+                    "Welcome. Drop a GitHub repo URL to analyze. I'll index files, dependencies, and complexity, then answer questions in real time.",
+            },
+        ]);
+        setInputMsg("");
+    }
+
   React.useEffect(() => {
     if (phase !== "processing") return;
     setLogs([]);
@@ -161,9 +179,12 @@ export default function Page() {
       <header className="sticky top-0 z-10 bg-white border-b-2 border-black">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
           <div className="inline-flex items-center gap-3">
-            <div className="border-2 border-black bg-amber-200 px-2 py-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-extrabold tracking-tight hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-transform">
+              <button
+                  onClick={resetToHome}
+                  className="border-2 border-black bg-amber-200 px-2 py-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-extrabold tracking-tight hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-transform cursor-pointer"
+              >
               RRA
-            </div>
+              </button>
             <span className="text-sm md:text-base font-semibold">Repository Analysis Engine</span>
           </div>
           <div className="hidden md:block text-xs font-mono opacity-70">fast • bold • friendly</div>
