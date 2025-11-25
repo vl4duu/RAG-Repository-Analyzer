@@ -176,6 +176,34 @@ class RepositoryStatus(BaseModel):
 
 
 # Endpoints
+@app.api_route("/undefined/{rest:path}", methods=[
+    "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
+], include_in_schema=False)
+async def _undefined_catchall(rest: str):
+    """Catch accidental requests to paths prefixed with /undefined.
+
+    This commonly happens when a frontend is deployed without configuring
+    NEXT_PUBLIC_API_URL correctly and constructs URLs like
+    https://<api-host>/undefined/index. Return a helpful 400 instead of 404.
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Misconfigured frontend API base URL",
+            "detail": "The request path contains '/undefined'. Ensure the frontend's NEXT_PUBLIC_API_URL is set to the deployed backend URL.",
+        },
+    )
+
+
+@app.get("/undefined", include_in_schema=False)
+async def _undefined_root():
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Misconfigured frontend API base URL",
+            "detail": "The request path is '/undefined'. Ensure the frontend's NEXT_PUBLIC_API_URL is set to the deployed backend URL.",
+        },
+    )
 @app.get("/")
 async def root(request: Request):
     """Root endpoint.

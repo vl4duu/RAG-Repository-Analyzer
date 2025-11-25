@@ -29,26 +29,52 @@ export default function Page() {
     },
   ]);
   const [inputMsg, setInputMsg] = React.useState("");
-    // Choose API URL:
+    // Choose and sanitize API URL:
     // - In production, require NEXT_PUBLIC_API_URL to be set at build time.
     // - During local development (when browsing from localhost/127.0.0.1),
     //   fall back to http://localhost:8000.
-    let API_URL = process.env.NEXT_PUBLIC_API_URL as string | undefined;
-    if (!API_URL && typeof window !== "undefined") {
+    function sanitizeApiUrl(raw: string | undefined): { url?: string; invalid: boolean; reason?: string } {
+        let val = (raw || "").trim();
+        // Treat literal 'undefined'/'null' as missing (can happen if build-time substitution fails)
+        if (!val || val.toLowerCase() === "undefined" || val.toLowerCase() === "null") {
+            return {invalid: true, reason: "missing"};
+        }
+        // If it contains '/undefined' anywhere, consider it invalid (miswired env)
+        if (/\bundefined\b/.test(val)) {
+            return {invalid: true, reason: "contains 'undefined'"};
+        }
+        // Remove trailing slash
+        val = val.replace(/\/$/, "");
+        // Basic scheme check
+        if (!/^https?:\/\//i.test(val)) {
+            return {invalid: true, reason: "must start with http(s)://"};
+        }
+        return {url: val, invalid: false};
+    }
+
+    let resolved: { url?: string; invalid: boolean; reason?: string } = {url: undefined, invalid: true};
+    {
+        // First try build-time env
+        resolved = sanitizeApiUrl(process.env.NEXT_PUBLIC_API_URL as string | undefined);
+        // If not valid and we're on localhost, fall back to local API for convenience
+        if (resolved.invalid && typeof window !== "undefined") {
         const host = window.location.hostname;
         const isLocal = host === "localhost" || host === "127.0.0.1";
         if (isLocal) {
-            API_URL = "http://localhost:8000";
+            resolved = sanitizeApiUrl("http://localhost:8000");
+        }
         }
     }
+    const API_URL = resolved.url;
+    const apiMisconfigured = (!API_URL) && (typeof window !== "undefined") && !["localhost", "127.0.0.1"].includes(window.location.hostname);
     if (!API_URL) {
         // Surface a clear console warning to help diagnose misconfiguration in deployed environments
         // without breaking the UI instantly. API calls will fail with a descriptive error below.
         console.warn(
-            "NEXT_PUBLIC_API_URL is not set. In production, configure it to the deployed backend URL."
+            "NEXT_PUBLIC_API_URL is not set or invalid. In production, configure it to the deployed backend URL.",
+            resolved.reason ? `(reason: ${resolved.reason})` : ""
         );
     }
-    const apiMisconfigured = !API_URL && (typeof window !== "undefined") && !["localhost", "127.0.0.1"].includes(window.location.hostname);
 
     function resetToHome() {
         setPhase("input");
