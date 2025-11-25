@@ -10,6 +10,7 @@ import time
 import logging
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -115,17 +116,58 @@ class RepositoryStatus(BaseModel):
 # Endpoints
 @app.get("/")
 async def root():
-    """Root endpoint."""
-    return {
-        "message": "RAG Repository Analyzer API",
-        "version": "1.0.0",
-        "endpoints": [
-            "/index",
-            "/query",
-            "/repositories",
-            "/status/{repo_path}"
-        ]
-    }
+    """Root endpoint.
+
+    In production, we prefer showing the frontend application rather than the raw API JSON.
+    If FRONTEND_URL (or the first value from FRONTEND_ORIGINS) is set, redirect there.
+    Otherwise, keep returning a small HTML landing page with links.
+    """
+    frontend_url = os.getenv("FRONTEND_URL")
+    if not frontend_url:
+        origins = os.getenv("FRONTEND_ORIGINS", "").split(",")
+        origins = [o.strip() for o in origins if o.strip()]
+        if origins:
+            frontend_url = origins[0]
+
+    if frontend_url:
+        # Use 307 to preserve method should someone POST to root by mistake
+        return RedirectResponse(url=frontend_url, status_code=307)
+
+    # Fallback lightweight HTML page for local/dev without configured frontend URL
+    html = """
+    <!doctype html>
+    <html lang=\"en\">
+      <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>RAG Repository Analyzer API</title>
+        <style>
+          body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 2rem; }
+          code { background: #f5f5f5; padding: 0.2rem 0.4rem; border-radius: 4px; }
+          ul { line-height: 1.8; }
+        </style>
+      </head>
+      <body>
+        <h1>RAG Repository Analyzer API</h1>
+        <p>Set <code>FRONTEND_URL</code> (or <code>FRONTEND_ORIGINS</code>) to redirect this root path to your frontend.</p>
+        <h2>Endpoints</h2>
+        <ul>
+          <li><code>/index</code></li>
+          <li><code>/query</code></li>
+          <li><code>/repositories</code></li>
+          <li><code>/status/{repo_path}</code></li>
+          <li><code>/health</code></li>
+        </ul>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
+
+
+@app.get("/health")
+async def health() -> JSONResponse:
+    """Health check endpoint for Render and uptime monitors."""
+    return JSONResponse({"status": "ok"})
 
 
 @app.post("/index", response_model=IndexResponse)

@@ -17,9 +17,11 @@ services:
         value: false
       - key: FRONTEND_ORIGINS
         sync: false
+      - key: FRONTEND_URL
+        sync: false
       - key: LOG_LEVEL
         value: INFO
-    healthCheckPath: /
+    healthCheckPath: /health
 
   # Frontend Service
   - type: web
