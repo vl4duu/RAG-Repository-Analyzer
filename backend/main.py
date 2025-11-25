@@ -9,9 +9,11 @@ import sys
 import time
 import logging
 from typing import Dict, List, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 import uvicorn
 from dotenv import load_dotenv
@@ -168,6 +170,47 @@ async def root():
 async def health() -> JSONResponse:
     """Health check endpoint for Render and uptime monitors."""
     return JSONResponse({"status": "ok"})
+
+
+def _resolve_frontend_url() -> Optional[str]:
+    """Resolve the configured frontend URL from env vars.
+
+    Priority: FRONTEND_URL, then first entry in FRONTEND_ORIGINS.
+    Returns None if neither is configured.
+    """
+    frontend_url = os.getenv("FRONTEND_URL")
+    if not frontend_url:
+        origins = os.getenv("FRONTEND_ORIGINS", "").split(",")
+        origins = [o.strip() for o in origins if o.strip()]
+        if origins:
+            frontend_url = origins[0]
+    return frontend_url or None
+
+
+@app.exception_handler(StarletteHTTPException)
+async def not_found_redirect_handler(request: Request, exc: StarletteHTTPException):
+    """Redirect unknown GET/HEAD paths to the frontend when configured.
+
+    This helps when someone navigates to a deep link on the backend domain or
+    when uptime monitors probe random paths; instead of 404, we forward them to
+    the actual frontend service. All known API routes continue to be handled by
+    FastAPI. For non-GET/HEAD methods or when no frontend is configured, fall
+    back to FastAPI's default handler.
+    """
+    try:
+        if exc.status_code == 404 and request.method in {"GET", "HEAD"}:
+            frontend_url = _resolve_frontend_url()
+            if frontend_url:
+                # Preserve the path for potential deep-linking on the frontend
+                target = frontend_url.rstrip("/") + request.url.path
+                # Include query string if present
+                if request.url.query:
+                    target += f"?{request.url.query}"
+                return RedirectResponse(url=target, status_code=307)
+    except Exception:
+        # If anything goes wrong, use default behavior
+        pass
+    return await http_exception_handler(request, exc)
 
 
 @app.post("/index", response_model=IndexResponse)
