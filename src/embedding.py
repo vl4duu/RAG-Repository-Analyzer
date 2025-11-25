@@ -1,5 +1,5 @@
 import os
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 from dotenv import load_dotenv
@@ -27,13 +27,15 @@ if openai is not None and OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
 
 
-def embed_textual_metadata(content: str) -> List[float]:
+def embed_textual_metadata(content: str, target_dim: Optional[int] = None) -> List[float]:
     """
     Create an embedding for textual content. Prefers OpenAI, falls back to local hash embedding.
     Returns a 1D Python list[float] suitable for vector DBs.
     """
-    # Prefer OpenAI if available and key is set
-    if openai is not None and OPENAI_API_KEY:
+    # Prefer OpenAI if available and key is set. Use only if target_dim is unspecified
+    # or matches the known OpenAI embedding dimension for the requested model.
+    # text-embedding-ada-002 returns 1536-dim vectors.
+    if openai is not None and OPENAI_API_KEY and (target_dim is None or target_dim == 1536):
         try:
             response = openai.Embedding.create(
                 model="text-embedding-ada-002",
@@ -45,7 +47,7 @@ def embed_textual_metadata(content: str) -> List[float]:
             # Fall through to local embedding in degraded mode
             print(f"OpenAI embedding failed, using fallback. Reason: {e}")
     # Fallback: deterministic local embedding
-    return _fallback_embed(content)
+    return _fallback_embed(content, dim=target_dim or 384)
 
 
 def _fallback_embed(text: str, dim: int = 384) -> List[float]:
@@ -92,12 +94,15 @@ if HF_AVAILABLE and os.getenv("DISABLE_HF", "0") != "1":
 
 
 # Function to generate embeddings for a code snippet
-def generate_code_embedding(code_snippet: str) -> List[float]:
+def generate_code_embedding(code_snippet: str, target_dim: Optional[int] = None) -> List[float]:
     """
     Generate a code-aware embedding. Uses CodeBERT if available, otherwise a local fallback.
     Returns a 1D Python list[float].
     """
-    if _tokenizer is not None and _model is not None and HF_AVAILABLE:
+    # CodeBERT produces 768-dim representations. Use it only if available and
+    # either target_dim is unspecified or explicitly 768 to avoid dim mismatch
+    # with previously persisted vector collections.
+    if _tokenizer is not None and _model is not None and HF_AVAILABLE and (target_dim is None or target_dim == 768):
         try:
             inputs = _tokenizer(
                 code_snippet,
@@ -112,5 +117,5 @@ def generate_code_embedding(code_snippet: str) -> List[float]:
             return embedding.detach().cpu().numpy().tolist()  # type: ignore
         except Exception as e:
             print(f"CodeBERT embedding failed, using fallback. Reason: {e}")
-    # Fallback: use the same local embedding, but with different dimension to reduce collision with text
-    return _fallback_embed(code_snippet, dim=512)
+    # Fallback: use the same local embedding, default 512-dim for code unless overridden
+    return _fallback_embed(code_snippet, dim=target_dim or 512)
