@@ -9,34 +9,39 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: FRONTEND_STATIC_DIR
-        value: frontend/out
+      - key: LOG_LEVEL
+        value: INFO
+      - key: API_ALLOW_ALL_ORIGINS
+        value: false
+      # Redirect unknown paths to the deployed frontend URL automatically
+      - key: FRONTEND_URL
+        fromService:
+          type: static
+          name: rag-analyzer-frontend
+          property: url
+      - key: FRONTEND_ORIGINS
+        fromService:
+          type: static
+          name: rag-analyzer-frontend
+          property: url
+      # Secrets (configure in Render dashboard or via env groups)
       - key: OPENAI_API_KEY
         sync: false
       - key: GITHUB_API_KEY
         sync: false
-      - key: API_ALLOW_ALL_ORIGINS
-        value: false
-      - key: FRONTEND_ORIGINS
-        sync: false
-      - key: FRONTEND_URL
-        sync: false
-      - key: NEXT_PUBLIC_API_URL
-        sync: false
-      - key: LOG_LEVEL
-        value: INFO
     healthCheckPath: /health
 
-  # Frontend Service
-  - type: web
+  # Frontend Static Site (built with Next.js export)
+  - type: static
     name: rag-analyzer-frontend
-    runtime: node
-    plan: free
-    buildCommand: cd frontend && npm install && npm run build
-    startCommand: cd frontend && npm start
+    buildCommand: cd frontend && npm ci --no-audit --no-fund && npm run build && npm run export
+    staticPublishPath: frontend/out
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
+      # Expose backend URL to the static site at build time
       - key: NEXT_PUBLIC_API_URL
-        sync: false
-    healthCheckPath: /
+        fromService:
+          type: web
+          name: rag-analyzer-api
+          property: url
