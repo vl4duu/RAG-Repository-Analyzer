@@ -46,6 +46,33 @@ class RAGService:
             "updated_at": None,
             "durations": {},
         }
+        # Track embedding dimensionality used for persisted collections to avoid mismatches
+        self.text_embedding_dim: Optional[int] = None
+        self.code_embedding_dim: Optional[int] = None
+
+    def _infer_collection_dim(self, collection) -> Optional[int]:
+        """Best-effort inference of collection embedding dimensionality.
+        Tries name suffix (_dNNN), then inspects a stored embedding via get(limit=1).
+        """
+        try:
+            # 1) Parse from name suffix if present
+            name = getattr(collection, "name", "")
+            if "_d" in name:
+                try:
+                    return int(name.rsplit("_d", 1)[-1])
+                except Exception:
+                    pass
+            # 2) Fetch a single embedding to determine length
+            try:
+                res = collection.get(limit=1, include=["embeddings"])  # type: ignore[arg-type]
+                embs = res.get("embeddings") if isinstance(res, dict) else None
+                if embs and len(embs) > 0 and isinstance(embs[0], (list, tuple)):
+                    return int(len(embs[0]))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return None
 
     def _update_status(self, stage: str, message: str = "", **counters):
         now = time.time()
@@ -83,6 +110,9 @@ class RAGService:
             # Reset state
             self.is_ready = False
             self.collections = None
+            # Reset inferred embedding dims to avoid carrying values across repositories
+            self.text_embedding_dim = None
+            self.code_embedding_dim = None
             
             if self.use_lazy_pipeline:
                 # New lightweight path: build minimal metadata index only
@@ -155,6 +185,17 @@ class RAGService:
                 dur_db = time.perf_counter() - t_db
                 self._status.setdefault("durations", {})["persist"] = dur_db
                 self._update_status("persist", f"Chroma collections ready in {dur_db:.1f}s")
+                # Infer and store embedding dims from collections
+                try:
+                    tcol = self.collections.get('textual_collection') if self.collections else None
+                    ccol = self.collections.get('code_collection') if self.collections else None
+                    if tcol is not None:
+                        self.text_embedding_dim = self._infer_collection_dim(tcol)
+                    if ccol is not None:
+                        self.code_embedding_dim = self._infer_collection_dim(ccol)
+                except Exception:
+                    # Best effort only
+                    pass
             
             # Update state
             self.current_repository = repo_path
@@ -194,11 +235,18 @@ class RAGService:
         # Generate code embeddings
         for j, doc in enumerate(code_chunks, start=1):
             embedding = await asyncio.get_event_loop().run_in_executor(
-                self.executor, generate_code_embedding, doc["content"]
+                self.executor, generate_code_embedding, doc["content"], None
             )
             code_embeddings.append(embedding)
             if j % 200 == 0 or j == len(code_chunks):
                 self._update_status("embed", f"Code embeddings: {j}/{len(code_chunks)} done")
+
+        # Store dims for later query-time consistency
+        try:
+            self.text_embedding_dim = int(len(textual_embeddings[0])) if textual_embeddings else self.text_embedding_dim
+            self.code_embedding_dim = int(len(code_embeddings[0])) if code_embeddings else self.code_embedding_dim
+        except Exception:
+            pass
 
         return {
             'textual_embeddings': textual_embeddings,
@@ -294,8 +342,17 @@ class RAGService:
         code_results = None
 
         if route in ("text", "both"):
+            # Ensure query embedding dimensionality matches persisted collection
+            target_dim = self.text_embedding_dim
+            if target_dim is None and self.collections and self.collections.get('textual_collection') is not None:
+                # Infer and cache from the actual collection to avoid dim mismatch
+                try:
+                    target_dim = self._infer_collection_dim(self.collections['textual_collection'])
+                    self.text_embedding_dim = target_dim
+                except Exception:
+                    target_dim = None
             textual_embedding = await asyncio.get_event_loop().run_in_executor(
-                self.executor, embed_textual_metadata, query
+                self.executor, embed_textual_metadata, query, target_dim
             )
             textual_results = self.collections['textual_collection'].query(
                 query_embeddings=[textual_embedding],
@@ -304,8 +361,17 @@ class RAGService:
             )
 
         if route in ("code", "both"):
+            # Ensure query embedding dimensionality matches persisted collection
+            target_dim = self.code_embedding_dim
+            if target_dim is None and self.collections and self.collections.get('code_collection') is not None:
+                # Infer and cache from the actual collection to avoid dim mismatch
+                try:
+                    target_dim = self._infer_collection_dim(self.collections['code_collection'])
+                    self.code_embedding_dim = target_dim
+                except Exception:
+                    target_dim = None
             code_embedding = await asyncio.get_event_loop().run_in_executor(
-                self.executor, generate_code_embedding, query
+                self.executor, generate_code_embedding, query, target_dim
             )
             code_results = self.collections['code_collection'].query(
                 query_embeddings=[code_embedding],
