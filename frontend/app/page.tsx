@@ -196,8 +196,7 @@ export default function Page() {
           <div className="w-full text-center">
             <h1 className="text-3xl md:text-4xl font-extrabold mb-4">Analyze a GitHub Repository</h1>
             <p className="text-neutral-700 mb-8 max-w-2xl mx-auto">
-              Paste a GitHub repository URL. I’ll download, index, and make it conversational. The UI
-              leans neo‑brutalist: bold borders, hard shadows, and a monospace soul.
+                Paste a GitHub repository URL. I’ll download, index, and make it conversational.
             </p>
 
             <form onSubmit={onAnalyze} className="grid grid-cols-1 gap-3 max-w-2xl mx-auto">

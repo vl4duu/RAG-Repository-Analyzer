@@ -10,13 +10,15 @@ import time
 import logging
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 import uvicorn
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 # Add src directory to path (project root) so `src` package is importable
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -77,6 +79,33 @@ else:
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
 
+# Static frontend mounting (optional): if a Next.js static export is present,
+# serve its asset subdirectories directly to avoid 404s for JS/CSS.
+_STATIC_ROOT = os.getenv("FRONTEND_STATIC_DIR", os.path.join("frontend", "out"))
+try:
+    if os.path.isdir(_STATIC_ROOT):
+        for _sub in ["_next", "static", "assets"]:
+            _path = os.path.join(_STATIC_ROOT, _sub)
+            if os.path.isdir(_path):
+                # Mount each subdir at its corresponding URL prefix
+                app.mount(f"/{_sub}", StaticFiles(directory=_path), name=f"frontend-{_sub}")
+
+        # Serve common top-level assets if present
+        _favicon = os.path.join(_STATIC_ROOT, "favicon.ico")
+        _robots = os.path.join(_STATIC_ROOT, "robots.txt")
+
+        if os.path.isfile(_favicon):
+            @app.get("/favicon.ico", include_in_schema=False)
+            async def _favicon_route():
+                return FileResponse(_favicon)
+
+        if os.path.isfile(_robots):
+            @app.get("/robots.txt", include_in_schema=False)
+            async def _robots_route():
+                return FileResponse(_robots, media_type="text/plain")
+except Exception:
+    pass
+
 # In-memory storage for indexed repositories and active RAG services
 # `indexed_repositories` can carry lightweight metadata (e.g., volume_info) if available.
 indexed_repositories: Dict[str, Dict] = {}
@@ -117,13 +146,23 @@ class RepositoryStatus(BaseModel):
 
 # Endpoints
 @app.get("/")
-async def root():
+async def root(request: Request):
     """Root endpoint.
 
     In production, we prefer showing the frontend application rather than the raw API JSON.
-    If FRONTEND_URL (or the first value from FRONTEND_ORIGINS) is set, redirect there.
-    Otherwise, keep returning a small HTML landing page with links.
+    Priority of behaviors:
+      1) If a static frontend build is available (FRONTEND_STATIC_DIR), serve index.html directly.
+      2) Else, if FRONTEND_URL (or the first value from FRONTEND_ORIGINS) is set, redirect there.
+      3) Otherwise, return a small HTML landing page with links.
     """
+    # 1) Serve pre-built static frontend if present
+    static_dir = os.getenv("FRONTEND_STATIC_DIR", os.path.join("frontend", "out"))
+    index_path = os.path.join(static_dir, "index.html")
+    try:
+        if os.path.isfile(index_path):
+            return FileResponse(index_path, media_type="text/html")
+    except Exception:
+        pass
     frontend_url = os.getenv("FRONTEND_URL")
     if not frontend_url:
         origins = os.getenv("FRONTEND_ORIGINS", "").split(",")
@@ -131,9 +170,24 @@ async def root():
         if origins:
             frontend_url = origins[0]
 
-    if frontend_url:
+    # Prevent redirect loops when FRONTEND_URL mistakenly points to this backend
+    def _same_origin(frontend: str) -> bool:
+        try:
+            f = urlparse(frontend)
+            if not f.scheme or not f.netloc:
+                return False
+            req_origin = f"{request.url.scheme}://{request.url.netloc}"
+            fe_origin = f"{f.scheme}://{f.netloc}"
+            return req_origin.lower() == fe_origin.lower()
+        except Exception:
+            return False
+
+    if frontend_url and not _same_origin(frontend_url):
         # Use 307 to preserve method should someone POST to root by mistake
         return RedirectResponse(url=frontend_url, status_code=307)
+    elif frontend_url and _same_origin(frontend_url):
+        logger.warning(
+            "Skipping root redirect: FRONTEND_URL origin equals backend origin; avoid configuring FRONTEND_URL to this backend to prevent loops.")
 
     # Fallback lightweight HTML page for local/dev without configured frontend URL
     html = """
@@ -187,6 +241,37 @@ def _resolve_frontend_url() -> Optional[str]:
     return frontend_url or None
 
 
+def _same_origin_url(frontend_url: str, request: Request) -> bool:
+    """Return True if the provided frontend_url shares the same scheme+host[:port] as the request."""
+    try:
+        parsed = urlparse(frontend_url)
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        req_origin = f"{request.url.scheme}://{request.url.netloc}"
+        fe_origin = f"{parsed.scheme}://{parsed.netloc}"
+        return req_origin.lower() == fe_origin.lower()
+    except Exception:
+        return False
+
+
+def _build_frontend_target(frontend_url: str, request: Request) -> str:
+    """Construct a safe redirect target to the frontend, preserving the request path and query.
+
+    If FRONTEND_URL mistakenly includes a non-root path, we normalize to its origin
+    to avoid endless path repetition like /foo/foo/foo. Example:
+      FRONTEND_URL = https://frontend.app/app -> target origin https://frontend.app + request.path
+    """
+    parsed = urlparse(frontend_url)
+    # Fallback: if parsing fails, return the raw frontend_url
+    if not parsed.scheme or not parsed.netloc:
+        return frontend_url
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    target = base.rstrip("/") + request.url.path
+    if request.url.query:
+        target += f"?{request.url.query}"
+    return target
+
+
 @app.exception_handler(StarletteHTTPException)
 async def not_found_redirect_handler(request: Request, exc: StarletteHTTPException):
     """Redirect unknown GET/HEAD paths to the frontend when configured.
@@ -199,18 +284,63 @@ async def not_found_redirect_handler(request: Request, exc: StarletteHTTPExcepti
     """
     try:
         if exc.status_code == 404 and request.method in {"GET", "HEAD"}:
+            # If a static frontend is available, attempt to serve matching file, otherwise index.html
+            static_dir = os.getenv("FRONTEND_STATIC_DIR", os.path.join("frontend", "out"))
+            index_path = os.path.join(static_dir, "index.html")
+            try:
+                if os.path.isfile(index_path):
+                    # Try exact file path under static_dir
+                    candidate = request.url.path
+                    # Append index.html for directory-like requests
+                    if candidate.endswith("/"):
+                        candidate += "index.html"
+                    abs_path = _safe_join(static_dir, candidate)
+                    if abs_path and os.path.isdir(abs_path):
+                        abs_path = os.path.join(abs_path, "index.html")
+                    if abs_path and os.path.isfile(abs_path):
+                        media = "text/html" if abs_path.endswith(".html") else None
+                        return FileResponse(abs_path, media_type=media)
+                    # Fallback to SPA index.html
+                    return FileResponse(index_path, media_type="text/html")
+            except Exception:
+                pass
+            # Avoid amplifying pathological paths
+            if len(str(request.url)) > 4096 or len(request.url.path) > 2048:
+                logger.warning("Skipping frontend redirect for extremely long path to avoid amplification: %s",
+                               request.url.path[:200])
+                raise Exception("path too long")
+
             frontend_url = _resolve_frontend_url()
             if frontend_url:
-                # Preserve the path for potential deep-linking on the frontend
-                target = frontend_url.rstrip("/") + request.url.path
-                # Include query string if present
-                if request.url.query:
-                    target += f"?{request.url.query}"
-                return RedirectResponse(url=target, status_code=307)
+                if _same_origin_url(frontend_url, request):
+                    logger.warning(
+                        "Skipping 404 redirect: FRONTEND_URL origin equals backend origin -> potential loop. FRONTEND_URL=%s",
+                        frontend_url)
+                else:
+                    target = _build_frontend_target(frontend_url, request)
+                    return RedirectResponse(url=target, status_code=307)
     except Exception:
         # If anything goes wrong, use default behavior
         pass
     return await http_exception_handler(request, exc)
+
+
+def _safe_join(base_dir: str, path: str) -> Optional[str]:
+    """Safely join a user-provided path to a base directory.
+
+    Returns an absolute path if the result is inside base_dir; otherwise None.
+    """
+    try:
+        base_abs = os.path.abspath(base_dir)
+        target = os.path.abspath(os.path.join(base_abs, path.lstrip("/")))
+        if os.path.commonpath([base_abs, target]) == base_abs:
+            return target
+    except Exception:
+        return None
+    return None
+
+
+## Catch-all route placed at the end of the file to avoid shadowing API endpoints
 
 
 @app.post("/index", response_model=IndexResponse)

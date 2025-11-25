@@ -4,11 +4,13 @@ services:
     name: rag-analyzer-api
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: bash build.sh
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: FRONTEND_STATIC_DIR
+        value: frontend/out
       - key: OPENAI_API_KEY
         sync: false
       - key: GITHUB_API_KEY
@@ -18,6 +20,8 @@ services:
       - key: FRONTEND_ORIGINS
         sync: false
       - key: FRONTEND_URL
+        sync: false
+      - key: NEXT_PUBLIC_API_URL
         sync: false
       - key: LOG_LEVEL
         value: INFO
