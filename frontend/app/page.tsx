@@ -16,6 +16,7 @@ type ChatMsg = {
 export default function Page() {
   const [phase, setPhase] = React.useState<Phase>("input");
   const [repoUrl, setRepoUrl] = React.useState("");
+  const [repoPath, setRepoPath] = React.useState("");
   const [progress, setProgress] = React.useState(0);
   const [logs, setLogs] = React.useState<string[]>([]);
   const [tab, setTab] = React.useState<Tab>("Chat");
@@ -28,6 +29,25 @@ export default function Page() {
     },
   ]);
   const [inputMsg, setInputMsg] = React.useState("");
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    function resetToHome() {
+        setPhase("input");
+        setRepoUrl("");
+        setRepoPath("");
+        setProgress(0);
+        setLogs([]);
+        setTab("Chat");
+        setChat([
+            {
+                id: cryptoId(),
+                role: "system",
+                content:
+                    "Welcome. Drop a GitHub repo URL to analyze. I'll index files, dependencies, and complexity, then answer questions in real time.",
+            },
+        ]);
+        setInputMsg("");
+    }
 
   React.useEffect(() => {
     if (phase !== "processing") return;
@@ -47,14 +67,9 @@ export default function Page() {
     const interval = setInterval(() => {
       setLogs((prev) => [...prev, `> ${steps[i % steps.length]}`].slice(-8));
       setProgress((p) => {
-        const n = Math.min(p + Math.ceil(Math.random() * 18), 100);
-        if (n >= 100) {
+        const n = Math.min(p + Math.ceil(Math.random() * 18), 99); // leave room for server completion
+        if (n >= 99) {
           clearInterval(interval);
-          setTimeout(() => {
-            setPhase("dashboard");
-            setLogs([]);
-            setProgress(0);
-          }, 450);
         }
         return n;
       });
@@ -64,29 +79,92 @@ export default function Page() {
     return () => clearInterval(interval);
   }, [phase]);
 
-  function onAnalyze(e?: React.FormEvent) {
+  async function onAnalyze(e?: React.FormEvent) {
     e?.preventDefault();
     if (!repoUrl.trim()) return;
+    const normalized = normalizeRepoPath(repoUrl.trim());
+    if (!normalized) {
+      setChat((c) => [
+        ...c,
+        { id: cryptoId(), role: "system", content: "Please provide a valid GitHub URL or 'owner/repo' path." },
+      ]);
+      return;
+    }
+    setRepoPath(normalized);
     setPhase("processing");
+    try {
+      const res = await fetch(`${API_URL}/index`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_path: normalized, use_langchain: true }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok) {
+        const msg = data?.detail || data?.message || `Failed to index repository (${res.status})`;
+        throw new Error(msg);
+      }
+      // Indexing complete
+      setProgress(100);
+      setLogs([]);
+      setPhase("dashboard");
+      setChat((c) => [
+        ...c,
+        {
+          id: cryptoId(),
+          role: "system",
+          content: `Indexed ${data?.repo_path || normalized}. You can now ask questions in Chat.`,
+        },
+      ]);
+    } catch (err: any) {
+      setPhase("input");
+      setProgress(0);
+      setLogs([]);
+      setChat((c) => [
+        ...c,
+        { id: cryptoId(), role: "system", content: `Indexing error: ${err?.message || String(err)}` },
+      ]);
+    }
   }
 
-  function sendMessage() {
+  async function sendMessage() {
     const content = inputMsg.trim();
     if (!content) return;
     const userMsg: ChatMsg = { id: cryptoId(), role: "user", content };
     setChat((c) => [...c, userMsg]);
     setInputMsg("");
+    if (!repoPath) {
+      setChat((c) => [
+        ...c,
+        { id: cryptoId(), role: "system", content: "Please index a repository first." },
+      ]);
+      return;
+    }
 
-    // Simulated system response
-    setTimeout(() => {
+    try {
+      const res = await fetch(`${API_URL}/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_path: repoPath, question: content, use_both_collections: true }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok) {
+        const msg = data?.detail || data?.message || `Query failed (${res.status})`;
+        throw new Error(msg);
+      }
+      const answer: string = data?.answer || "(no answer)";
+      const sourcesText = summarizeSources(data);
       const sysMsg: ChatMsg = {
         id: cryptoId(),
         role: "system",
-        content:
-          "Analyzed context.\n\n- Files: 134\n- Dependencies: 23\n- Hotspots: src/parser.ts, src/analyzer.ts\n\nYou can ask for a breakdown by directory, list deprecated packages, or request complexity charts.",
+        content: [answer, sourcesText].filter(Boolean).join("\n\n"),
       };
       setChat((c) => [...c, sysMsg]);
-    }, 450);
+    } catch (err: any) {
+      setChat((c) => [
+        ...c,
+        { id: cryptoId(), role: "system", content: `Error: ${err?.message || String(err)}` },
+      ]);
+    }
   }
 
   const suggested: string[] = [
@@ -101,9 +179,12 @@ export default function Page() {
       <header className="sticky top-0 z-10 bg-white border-b-2 border-black">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
           <div className="inline-flex items-center gap-3">
-            <div className="border-2 border-black bg-amber-200 px-2 py-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-extrabold tracking-tight hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-transform">
+              <button
+                  onClick={resetToHome}
+                  className="border-2 border-black bg-amber-200 px-2 py-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-extrabold tracking-tight hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none transition-transform cursor-pointer"
+              >
               RRA
-            </div>
+              </button>
             <span className="text-sm md:text-base font-semibold">Repository Analysis Engine</span>
           </div>
           <div className="hidden md:block text-xs font-mono opacity-70">fast • bold • friendly</div>
@@ -279,4 +360,44 @@ function MessageBubble({ msg }: { msg: ChatMsg }) {
 function cryptoId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return Math.random().toString(36).slice(2);
+}
+
+function normalizeRepoPath(input: string): string {
+  try {
+    // Accept owner/repo directly
+    const simpleMatch = input.match(/^[\w.-]+\/[\w.-]+$/);
+    if (simpleMatch) return input;
+    // Parse GitHub URLs
+    const url = new URL(input);
+    if (!/github\.com$/.test(url.hostname)) return "";
+    const parts = url.pathname.replace(/^\//, "").split("/");
+    if (parts.length >= 2) {
+      return `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+async function safeJson(res: Response) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function summarizeSources(data: any): string {
+  let sources: any[] = [];
+  if (Array.isArray(data?.all_sources)) sources = data.all_sources;
+  else if (Array.isArray(data?.sources)) sources = data.sources;
+  else sources = [...(data?.textual_sources || []), ...(data?.code_sources || [])];
+  if (!sources.length) return "";
+  const lines = sources.slice(0, 5).map((s, idx) => {
+    const name = s.file_name || s?.metadata?.file_name || s?.path || s?.metadata?.path || `source_${idx+1}`;
+    const score = typeof s.score === "number" ? s.score.toFixed(3) : s?.metadata?.score || "";
+    return `- ${name}${score ? ` (score ${score})` : ""}`;
+  });
+  return `Sources:\n${lines.join("\n")}`;
 }
