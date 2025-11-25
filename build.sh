@@ -12,9 +12,10 @@ if command -v npm >/dev/null 2>&1; then
   echo "npm detected. Building Next.js frontend."
   (
     cd frontend || exit 0
-    # Prefer clean, but fall back to install for environments without lockfile parity
+    # Use npm install to avoid strict lockfile parity errors (EUSAGE) on Render
+    # where package-lock may not include platform-specific optional deps (e.g., sharp).
     if command -v npm >/dev/null 2>&1; then
-      npm ci || npm install
+      npm install --no-audit --no-fund
       # Standard Next.js build
       npm run build || {
         echo "Warning: 'npm run build' failed. Skipping frontend export.";
