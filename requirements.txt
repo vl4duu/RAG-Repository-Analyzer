@@ -23,7 +23,7 @@ tiktoken==0.8.0
 
 # LangChain (splits in v0.3)
 langchain==0.3.18
-langchain-text-splitters==0.3.6
+langchain-text-splitters==0.3.9
 
 # Optional extras (uncomment as needed)
 # openai>=1.0.0           # enable OpenAI embeddings/chat if OPENAI_API_KEY is set
