@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "export": "next export -o out"
+    "start": "next start"
   },
   "engines": {
     "node": ">=18.18.0"

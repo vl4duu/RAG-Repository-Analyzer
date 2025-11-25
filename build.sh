@@ -16,17 +16,12 @@ if command -v npm >/dev/null 2>&1; then
     # where package-lock may not include platform-specific optional deps (e.g., sharp).
     if command -v npm >/dev/null 2>&1; then
       npm install --no-audit --no-fund
-      # Standard Next.js build
+      # Build the static export. With next.config.js using output: 'export',
+      # `next build` will produce the static files in `frontend/out`.
       npm run build || {
-        echo "Warning: 'npm run build' failed. Skipping frontend export.";
+        echo "Warning: 'npm run build' failed. Skipping frontend build but continuing backend build.";
         exit 0;
       }
-      # Try to export static site (Next.js). If not configured, skip silently.
-      if npm run | grep -q "export"; then
-        npm run export || echo "Warning: 'npm run export' failed. Ensure next export is supported if you want to serve static files from backend."
-      else
-        echo "No 'export' script found. If you want to serve frontend statically from backend, add an 'export' script (next export)."
-      fi
     fi
   )
 else
