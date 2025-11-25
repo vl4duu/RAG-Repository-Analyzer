@@ -1,0 +1,36 @@
+services:
+  # Backend API Service
+  - type: web
+    name: rag-analyzer-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GITHUB_API_KEY
+        sync: false
+      - key: API_ALLOW_ALL_ORIGINS
+        value: false
+      - key: FRONTEND_ORIGINS
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+    healthCheckPath: /
+
+  # Frontend Service
+  - type: web
+    name: rag-analyzer-frontend
+    runtime: node
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+    healthCheckPath: /
