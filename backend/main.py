@@ -6,6 +6,8 @@ Provides endpoints for indexing GitHub repositories and querying them.
 
 import os
 import sys
+import time
+import logging
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +23,15 @@ from src.rag_service import RAGService
 
 load_dotenv()
 
+# Basic logging config (respect LOG_LEVEL env). Uvicorn will also manage logs, but this ensures
+# our modules use a consistent formatter when imported outside uvicorn too.
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="RAG Repository Analyzer API",
     description="API for analyzing GitHub repositories using RAG",
@@ -35,6 +46,9 @@ default_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+# Regex to allow common private-network origins by default (http[s]://<ip>:<port>)
+private_net_origin_regex = r"^https?://(localhost|127\\.0\\.0\\.1|10(?:\\.\\d{1,3}){3}|192\\.168(?:\\.\\d{1,3}){2}|172\\.(?:1[6-9]|2\\d|3[0-1])(?:\\.\\d{1,3}){2})(?::\\d+)?$"
 
 if allow_all:
     cors_kwargs = dict(
@@ -52,6 +66,7 @@ else:
     )
     cors_kwargs = dict(
         allow_origins=list({*default_origins, *env_origins}),
+        allow_origin_regex=private_net_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -136,11 +151,14 @@ async def index_repo(request: IndexRequest, background_tasks: BackgroundTasks):
                 volume_info=indexed_repositories[repo_path].get("volume_info")
             )
         
-        print(f"Indexing repository: {repo_path}")
+        logger.info(f"Index request received for repo: {repo_path}")
 
         # Create and run the RAG service analysis for this repository
         service = RAGService()
+        t0 = time.perf_counter()
         result = await service.analyze_repository(repo_path)
+        elapsed = time.perf_counter() - t0
+        logger.info(f"Indexing completed for {repo_path} in {elapsed:.1f}s")
 
         # Store service instance in memory for subsequent queries
         rag_instances[repo_path] = service
@@ -158,7 +176,7 @@ async def index_repo(request: IndexRequest, background_tasks: BackgroundTasks):
         )
         
     except Exception as e:
-        print(f"Error indexing repository: {e}")
+        logger.exception(f"Error indexing repository: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to index repository: {str(e)}"
@@ -204,7 +222,7 @@ async def query_repo(request: QueryRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error querying repository: {e}")
+        logger.exception(f"Error querying repository: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to query repository: {str(e)}"

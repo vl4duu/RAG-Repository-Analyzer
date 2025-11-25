@@ -1,5 +1,7 @@
+import os
 import numpy as np
 import logging
+import time
 from typing import Dict, List, Any, Optional, Tuple
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -7,6 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from .github_parser import get_repo_files, chunk_repository_files
 from .embedding import embed_textual_metadata, generate_code_embedding
 from .chromaDB_setup import setup_chroma_collections
+from .metadata_index import MetadataIndex
+from .file_selector import FileSelector
+from .lazy_parser import LazyFileParser
 
 # OpenAI is optional; operate in degraded/offline mode when unavailable
 try:
@@ -26,6 +31,36 @@ class RAGService:
         self.collections: Optional[Dict] = None
         self.is_ready: bool = False
         self.executor = ThreadPoolExecutor(max_workers=4)
+        # Feature flag to enable the query-driven lazy pipeline
+        self.use_lazy_pipeline: bool = os.getenv("USE_LAZY_PIPELINE", "0").lower() in {"1", "true", "yes"}
+        # Components for the lazy pipeline
+        self.metadata: Optional[MetadataIndex] = None
+        self.file_selector: Optional[FileSelector] = None
+        self.lazy_parser: Optional[LazyFileParser] = None
+        # Lightweight status/progress tracking (in-memory)
+        self._status: Dict[str, Any] = {
+            "stage": "idle",
+            "message": "",
+            "counters": {},
+            "started_at": None,
+            "updated_at": None,
+            "durations": {},
+        }
+
+    def _update_status(self, stage: str, message: str = "", **counters):
+        now = time.time()
+        self._status.update({
+            "stage": stage,
+            "message": message,
+            "updated_at": now,
+        })
+        if counters:
+            c = self._status.get("counters", {})
+            c.update(counters)
+            self._status["counters"] = c
+        # Also log a concise heartbeat at INFO
+        if message:
+            logger.info(f"[{stage}] {message} | counters={self._status.get('counters', {})}")
     
     async def analyze_repository(self, repo_path: str) -> Dict[str, Any]:
         """
@@ -42,41 +77,92 @@ class RAGService:
             if "nonexistent" in repo_path.lower():
                 raise ValueError(f"Repository '{repo_path}' not found or inaccessible")
             logger.info(f"Starting analysis of repository: {repo_path}")
+            self._status["started_at"] = time.time()
+            self._update_status("start", f"Begin analysis for {repo_path}")
             
             # Reset state
             self.is_ready = False
             self.collections = None
             
-            # Step 1: Fetch repository files
-            logger.info("Fetching repository files...")
-            repo_files = await asyncio.get_event_loop().run_in_executor(
-                self.executor, get_repo_files, repo_path
-            )
-            
-            if not repo_files:
-                raise ValueError(f"No files found in repository {repo_path}")
-            
-            # Step 2: Chunk repository files
-            logger.info("Chunking repository files...")
-            chunked_docs = await asyncio.get_event_loop().run_in_executor(
-                self.executor, chunk_repository_files, repo_files
-            )
-            
-            # Step 3: Generate embeddings
-            logger.info("Generating embeddings...")
-            embedded_chunks = await self._generate_embeddings(chunked_docs)
-            
-            # Step 4: Setup ChromaDB collections
-            logger.info("Setting up ChromaDB collections...")
-            self.collections = await asyncio.get_event_loop().run_in_executor(
-                self.executor, setup_chroma_collections, chunked_docs, embedded_chunks
-            )
+            if self.use_lazy_pipeline:
+                # New lightweight path: build minimal metadata index only
+                logger.info("Building lightweight metadata index (lazy pipeline enabled)...")
+                t_meta = time.perf_counter()
+                self._update_status("metadata", "Building metadata index")
+                metadata = MetadataIndex(repo_path, head_lines=20).build()
+                dur_meta = time.perf_counter() - t_meta
+                self._status.setdefault("durations", {})["metadata"] = dur_meta
+                self._update_status("metadata", f"Metadata index ready in {dur_meta:.1f}s", files=len(metadata.by_path))
+                # Initialize lazy components
+                self.metadata = metadata
+                self.file_selector = FileSelector(metadata)
+                self.lazy_parser = LazyFileParser(metadata, cache_size=100)
+                # No collections in lazy path
+                self.collections = None
+            else:
+                # Legacy full indexing path
+                # Step 1: Fetch repository files
+                logger.info("Fetching repository files...")
+                t_fetch = time.perf_counter()
+                self._update_status("fetch", "Fetching repository files")
+                repo_files = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, get_repo_files, repo_path
+                )
+                dur_fetch = time.perf_counter() - t_fetch
+                self._status.setdefault("durations", {})["fetch"] = dur_fetch
+                self._update_status("fetch", f"Fetched repository files in {dur_fetch:.1f}s", files=len(repo_files))
+                
+                if not repo_files:
+                    raise ValueError(f"No files found in repository {repo_path}")
+                
+                # Step 2: Chunk repository files
+                logger.info("Chunking repository files...")
+                t_chunk = time.perf_counter()
+                self._update_status("chunk", "Chunking repository files")
+                chunked_docs = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, chunk_repository_files, repo_files
+                )
+                dur_chunk = time.perf_counter() - t_chunk
+                self._status.setdefault("durations", {})["chunk"] = dur_chunk
+                self._update_status(
+                    "chunk",
+                    f"Chunked files in {dur_chunk:.1f}s",
+                    textual_chunks=len(chunked_docs.get('textual_chunks', [])),
+                    code_chunks=len(chunked_docs.get('code_chunks', [])),
+                )
+                
+                # Step 3: Generate embeddings
+                logger.info("Generating embeddings...")
+                self._update_status("embed", "Generating embeddings")
+                t_embed = time.perf_counter()
+                embedded_chunks = await self._generate_embeddings(chunked_docs)
+                dur_embed = time.perf_counter() - t_embed
+                self._status.setdefault("durations", {})["embed"] = dur_embed
+                self._update_status(
+                    "embed",
+                    f"Generated embeddings in {dur_embed:.1f}s",
+                    textual_embeddings=len(embedded_chunks.get('textual_embeddings', [])),
+                    code_embeddings=len(embedded_chunks.get('code_embeddings', [])),
+                )
+                
+                # Step 4: Setup ChromaDB collections
+                logger.info("Setting up ChromaDB collections...")
+                self._update_status("persist", "Setting up ChromaDB collections")
+                t_db = time.perf_counter()
+                self.collections = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, setup_chroma_collections, chunked_docs, embedded_chunks
+                )
+                dur_db = time.perf_counter() - t_db
+                self._status.setdefault("durations", {})["persist"] = dur_db
+                self._update_status("persist", f"Chroma collections ready in {dur_db:.1f}s")
             
             # Update state
             self.current_repository = repo_path
             self.is_ready = True
             
-            logger.info(f"Successfully analyzed repository: {repo_path}")
+            total_elapsed = (time.time() - self._status.get("started_at", time.time()))
+            logger.info(f"Successfully analyzed repository: {repo_path} in {total_elapsed:.1f}s")
+            self._update_status("done", f"Analysis complete in {total_elapsed:.1f}s")
             return {
                 "status": "success",
                 "message": f"Repository {repo_path} analyzed successfully",
@@ -89,24 +175,31 @@ class RAGService:
             raise e
 
     async def _generate_embeddings(self, chunked_docs: Dict) -> Dict[str, Any]:
-        """Generate embeddings for textual and code chunks"""
-        
+        """Generate embeddings for textual and code chunks with periodic progress logs."""
+        textual_embeddings: List[List[float]] = []
+        code_embeddings: List[List[float]] = []
+
+        text_chunks = chunked_docs.get('textual_chunks', [])
+        code_chunks = chunked_docs.get('code_chunks', [])
+
         # Generate textual embeddings
-        textual_embeddings = []
-        for doc in chunked_docs['textual_chunks']:
+        for i, doc in enumerate(text_chunks, start=1):
             embedding = await asyncio.get_event_loop().run_in_executor(
                 self.executor, embed_textual_metadata, doc["content"]
             )
             textual_embeddings.append(embedding)
-        
+            if i % 200 == 0 or i == len(text_chunks):
+                self._update_status("embed", f"Text embeddings: {i}/{len(text_chunks)} done")
+
         # Generate code embeddings
-        code_embeddings = []
-        for doc in chunked_docs['code_chunks']:
+        for j, doc in enumerate(code_chunks, start=1):
             embedding = await asyncio.get_event_loop().run_in_executor(
                 self.executor, generate_code_embedding, doc["content"]
             )
             code_embeddings.append(embedding)
-        
+            if j % 200 == 0 or j == len(code_chunks):
+                self._update_status("embed", f"Code embeddings: {j}/{len(code_chunks)} done")
+
         return {
             'textual_embeddings': textual_embeddings,
             'code_embeddings': code_embeddings
@@ -123,14 +216,17 @@ class RAGService:
         Returns:
             Dictionary with answer and sources
         """
-        if not self.is_ready or not self.collections:
+        if not self.is_ready:
             raise ValueError("No repository has been analyzed yet. Please analyze a repository first.")
         
         try:
             logger.info(f"Processing query: {question}")
             
             # Step 1: Retrieve relevant chunks
-            relevant_chunks = await self._retrieve_relevant_chunks(question, top_k)
+            if self.use_lazy_pipeline:
+                relevant_chunks = await self._retrieve_relevant_chunks_lazy(question, top_k)
+            else:
+                relevant_chunks = await self._retrieve_relevant_chunks(question, top_k)
             
             # Step 2: Construct RAG prompt
             rag_prompt = self._construct_rag_prompt(question, relevant_chunks)
@@ -149,6 +245,46 @@ class RAGService:
         except Exception as e:
             logger.error(f"Error processing query '{question}': {str(e)}")
             raise e
+
+    async def _retrieve_relevant_chunks_lazy(self, query: str, top_k: int) -> Dict[str, List]:
+        """Select files using metadata, parse on demand, and score by similarity to the query."""
+        if not (self.metadata and self.file_selector and self.lazy_parser):
+            raise ValueError("Lazy pipeline is not initialized. Analyze repository first.")
+
+        # 1) Select candidate files
+        candidates = self.file_selector.select_files(query, max_files=max(20, top_k * 4))
+        # 2) Parse selected files (shallow)
+        parsed = self.lazy_parser.parse_files(candidates)
+        # 3) Score by embedding similarity (fallback embeds if no OpenAI)
+        q_emb = await asyncio.get_event_loop().run_in_executor(self.executor, embed_textual_metadata, query)
+
+        def cosine(a: List[float], b: List[float]) -> float:
+            va = np.array(a, dtype=float)
+            vb = np.array(b, dtype=float)
+            if va.size == 0 or vb.size == 0:
+                return 0.0
+            denom = (np.linalg.norm(va) * np.linalg.norm(vb))
+            return float(np.dot(va, vb) / denom) if denom > 0 else 0.0
+
+        scored_text: List[Tuple[float, str, Dict[str, Any]]] = []
+        scored_code: List[Tuple[float, str, Dict[str, Any]]] = []
+
+        for f in parsed:
+            content = f.get("content", "")
+            emb = await asyncio.get_event_loop().run_in_executor(self.executor, embed_textual_metadata, content)
+            sim = cosine(q_emb, emb)
+            # classify as text vs code via extension heuristic
+            path = f.get("path", "")
+            is_text = path.lower().endswith((".md", ".txt", ".rst", ".adoc"))
+            meta = {"file_name": path, "content_type": "text" if is_text else "code"}
+            if is_text:
+                scored_text.append((sim, content, meta))
+            else:
+                scored_code.append((sim, content, meta))
+
+        top_text = sorted(scored_text, key=lambda x: x[0], reverse=True)[:top_k]
+        top_code = sorted(scored_code, key=lambda x: x[0], reverse=True)[:top_k]
+        return {"textual": top_text, "code": top_code}
     
     async def _retrieve_relevant_chunks(self, query: str, top_k: int) -> Dict[str, List]:
         """Retrieve relevant chunks from ChromaDB collections with simple intent routing."""
@@ -317,11 +453,20 @@ class RAGService:
     
     def get_status(self) -> Dict[str, Any]:
         """Get the current status of the RAG service"""
-        return {
+        base = {
             "repository": self.current_repository,
             "ready": self.is_ready,
-            "message": f"Repository '{self.current_repository}' is ready for queries" if self.is_ready else "No repository analyzed"
+            "message": f"Repository '{self.current_repository}' is ready for queries" if self.is_ready else self._status.get("message", "No repository analyzed"),
         }
+        # Include lightweight progress fields (do not change API contract of endpoints using RepositoryStatus)
+        base.update({
+            "stage": self._status.get("stage"),
+            "counters": self._status.get("counters", {}),
+            "durations": self._status.get("durations", {}),
+            "started_at": self._status.get("started_at"),
+            "updated_at": self._status.get("updated_at"),
+        })
+        return base
     
     def cleanup(self):
         """Cleanup resources"""
