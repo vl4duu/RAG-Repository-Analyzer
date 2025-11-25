@@ -48,6 +48,7 @@ export default function Page() {
             "NEXT_PUBLIC_API_URL is not set. In production, configure it to the deployed backend URL."
         );
     }
+    const apiMisconfigured = !API_URL && (typeof window !== "undefined") && !["localhost", "127.0.0.1"].includes(window.location.hostname);
 
     function resetToHome() {
         setPhase("input");
@@ -111,6 +112,11 @@ export default function Page() {
     setRepoPath(normalized);
     setPhase("processing");
     try {
+        if (!API_URL) {
+            throw new Error(
+                "Frontend is not configured with NEXT_PUBLIC_API_URL. Set it to your deployed backend URL and redeploy."
+            );
+        }
       const res = await fetch(`${API_URL}/index`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -159,6 +165,11 @@ export default function Page() {
     }
 
     try {
+        if (!API_URL) {
+            throw new Error(
+                "Frontend is not configured with NEXT_PUBLIC_API_URL. Set it to your deployed backend URL and redeploy."
+            );
+        }
       const res = await fetch(`${API_URL}/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,6 +205,12 @@ export default function Page() {
 
   return (
     <div className="min-h-dvh bg-neutral-50 text-neutral-900">
+        {apiMisconfigured && (
+            <div className="w-full bg-red-600 text-white text-sm px-4 py-2 text-center">
+                NEXT_PUBLIC_API_URL is not set. This deployed frontend needs to know your API base URL. Configure it and
+                redeploy.
+            </div>
+        )}
       <header className="sticky top-0 z-10 bg-white border-b-2 border-black">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
           <div className="inline-flex items-center gap-3">
