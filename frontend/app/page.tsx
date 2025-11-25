@@ -29,7 +29,25 @@ export default function Page() {
     },
   ]);
   const [inputMsg, setInputMsg] = React.useState("");
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    // Choose API URL:
+    // - In production, require NEXT_PUBLIC_API_URL to be set at build time.
+    // - During local development (when browsing from localhost/127.0.0.1),
+    //   fall back to http://localhost:8000.
+    let API_URL = process.env.NEXT_PUBLIC_API_URL as string | undefined;
+    if (!API_URL && typeof window !== "undefined") {
+        const host = window.location.hostname;
+        const isLocal = host === "localhost" || host === "127.0.0.1";
+        if (isLocal) {
+            API_URL = "http://localhost:8000";
+        }
+    }
+    if (!API_URL) {
+        // Surface a clear console warning to help diagnose misconfiguration in deployed environments
+        // without breaking the UI instantly. API calls will fail with a descriptive error below.
+        console.warn(
+            "NEXT_PUBLIC_API_URL is not set. In production, configure it to the deployed backend URL."
+        );
+    }
 
     function resetToHome() {
         setPhase("input");

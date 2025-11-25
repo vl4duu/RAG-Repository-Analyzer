@@ -43,8 +43,10 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS (dev-friendly defaults + env override)
+# Configure CORS (strict in production, dev-friendly locally)
 frontend_origins_env = os.getenv("FRONTEND_ORIGINS") or os.getenv("FRONTEND_ORIGIN")
+frontend_url_env = os.getenv("FRONTEND_URL")
+is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL"))
 allow_all = os.getenv("API_ALLOW_ALL_ORIGINS", "false").lower() in {"1", "true", "yes"}
 
 default_origins = [
@@ -56,6 +58,7 @@ default_origins = [
 private_net_origin_regex = r"^https?://(localhost|127\\.0\\.0\\.1|10(?:\\.\\d{1,3}){3}|192\\.168(?:\\.\\d{1,3}){2}|172\\.(?:1[6-9]|2\\d|3[0-1])(?:\\.\\d{1,3}){2})(?::\\d+)?$"
 
 if allow_all:
+    # Fully open CORS (not recommended for production)
     cors_kwargs = dict(
         allow_origins=["*"],
         # credentials cannot be used with wildcard origins
@@ -69,13 +72,41 @@ else:
         if frontend_origins_env
         else []
     )
-    cors_kwargs = dict(
-        allow_origins=list({*default_origins, *env_origins}),
-        allow_origin_regex=private_net_origin_regex,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+
+    # If specific frontend origins/URL are configured, enforce strict CORS: only those origins
+    configured_frontend_origins = set(env_origins)
+    if frontend_url_env:
+        configured_frontend_origins.add(frontend_url_env.strip())
+
+    if configured_frontend_origins:
+        # Strict mode: do NOT allow localhost or private networks implicitly
+        cors_kwargs = dict(
+            allow_origins=sorted(configured_frontend_origins),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    else:
+        if is_render:
+            # In deployed environment with no configured origins, be strict: disallow all cross-origin.
+            # This prevents browsers on localhost or private networks from accessing the API by default.
+            cors_kwargs = dict(
+                allow_origins=[],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+            logger.warning(
+                "CORS is in strict mode with no allowed origins configured. Set FRONTEND_ORIGINS or FRONTEND_URL.")
+        else:
+            # Dev-friendly defaults when nothing is configured: allow localhost and common private nets
+            cors_kwargs = dict(
+                allow_origins=list({*default_origins}),
+                allow_origin_regex=private_net_origin_regex,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
 

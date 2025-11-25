@@ -11,21 +11,21 @@ services:
         value: 3.11.0
       - key: LOG_LEVEL
         value: INFO
-      # Temporarily allow all CORS origins during the initial deployment to prevent
-      # cross-service dependency issues. After both services are up, you should
-      # switch this to false and configure specific origins via FRONTEND_ORIGINS.
+      # Enforce strict CORS by default; only the deployed frontend origin will be allowed.
       - key: API_ALLOW_ALL_ORIGINS
-        value: true
-      # NOTE: Do NOT auto-populate FRONTEND_URL or FRONTEND_ORIGINS from the frontend service here.
-      # Doing so creates a circular dependency between the backend and frontend during deployment.
-      #
-      # After both services are deployed, you may manually set:
-      # - FRONTEND_URL: the public URL of the static frontend (e.g., https://your-frontend.onrender.com)
-      # - FRONTEND_ORIGINS: comma-separated list of allowed frontend origins for CORS
-      #
-      # Example (set via Render Dashboard after deploy):
-      # FRONTEND_URL=https://rag-analyzer-frontend.onrender.com
-      # FRONTEND_ORIGINS=https://rag-analyzer-frontend.onrender.com,https://www.yourdomain.com
+        value: false
+      # Allow only the deployed frontend's URL to call the API.
+      - key: FRONTEND_ORIGINS
+        fromService:
+          name: rag-analyzer-frontend
+          type: static
+          property: url
+      # Also set FRONTEND_URL for root redirect convenience.
+      - key: FRONTEND_URL
+        fromService:
+          name: rag-analyzer-frontend
+          type: static
+          property: url
       # Secrets (configure in Render dashboard or via env groups)
       - key: OPENAI_API_KEY
         sync: false
@@ -43,12 +43,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
-      # Do NOT auto-reference the backend service URL here to keep deployments independent.
-      # After deployment, you can manually configure the API URL for the frontend build
-      # (via environment groups or static site settings) e.g.:
-      # NEXT_PUBLIC_API_URL=https://rag-analyzer-api.onrender.com
-
-      # Post-deploy steps (manual):
-      # 1) Set NEXT_PUBLIC_API_URL on the frontend to the backend's public URL.
-      # 2) On the backend, switch API_ALLOW_ALL_ORIGINS=false and configure FRONTEND_ORIGINS
-      #    with the frontend's public URL(s) to tighten CORS.
+      # Configure the frontend to target the deployed backend API URL.
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: rag-analyzer-api
+          type: web
+          property: url
