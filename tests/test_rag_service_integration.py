@@ -18,12 +18,10 @@ def _force_offline(monkeypatch):
     # Ensure OpenAI key is absent so embeddings fallback is used
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     # Force ChatCompletion path to be disabled so we do not attempt network calls
-    try:
-        import openai  # type: ignore
-        monkeypatch.setattr(openai, "ChatCompletion", None, raising=False)
-    except Exception:
-        # If openai is not importable or already disabled, that's fine
-        pass
+    import src.rag_service
+    monkeypatch.setattr(src.rag_service, "_openai_client", None, raising=False)
+    import src.embedding
+    monkeypatch.setattr(src.embedding, "_openai_client", None, raising=False)
 
 
 @pytest.fixture()
@@ -110,5 +108,33 @@ def test_routing_returns_both_text_and_code(isolated_chroma_dir, monkeypatch):
     # Expect both text and code sources to be present in the merged result
     assert "text" in content_types
     assert "code" in content_types
+
+    service.cleanup()
+
+
+@pytest.mark.parametrize("pipeline_cls", ["DefaultPipeline", "LazyPipeline"])
+def test_analyze_and_query_both_pipelines(pipeline_cls, isolated_chroma_dir, monkeypatch):
+    """Both pipelines must produce a valid answer + sources through RAGService."""
+    _force_offline(monkeypatch)
+    from src.default_pipeline import DefaultPipeline
+    from src.lazy_pipeline import LazyPipeline
+    from src.rag_service import RAGService
+
+    pipeline = DefaultPipeline() if pipeline_cls == "DefaultPipeline" else LazyPipeline()
+    service = RAGService(pipeline)
+
+    result = asyncio.run(service.analyze_repository("example/repo"))
+    assert result["status"] == "success"
+    assert service.is_ready is True
+
+    qr = asyncio.run(service.query_repository("What does this repository contain?"))
+    assert isinstance(qr.get("answer"), str) and len(qr["answer"]) > 0
+    assert isinstance(qr.get("sources"), list)
+
+    src0 = qr["sources"][0] if qr["sources"] else None
+    if src0:
+        assert {"file_name", "content_type", "score", "content"} <= set(src0.keys())
+        assert src0["content_type"] in ("text", "code")
+        assert isinstance(src0["score"], float)
 
     service.cleanup()
