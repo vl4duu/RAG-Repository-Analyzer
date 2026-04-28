@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 # Use the consolidated RAG service implementation
-from src.rag_service import RAGService
+from src.rag_service import RAGService, _create_pipeline
 
 load_dotenv()
 
@@ -428,7 +428,7 @@ async def index_repo(request: IndexRequest, background_tasks: BackgroundTasks):
         logger.info(f"Index request received for repo: {repo_path}")
 
         # Create and run the RAG service analysis for this repository
-        service = RAGService()
+        service = RAGService(_create_pipeline())
         t0 = time.perf_counter()
         result = await service.analyze_repository(repo_path)
         elapsed = time.perf_counter() - t0
