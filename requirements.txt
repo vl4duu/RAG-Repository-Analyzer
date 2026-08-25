@@ -26,6 +26,6 @@ langchain==0.3.18
 langchain-text-splitters==0.3.9
 
 # Optional extras (uncomment as needed)
-# openai>=1.0.0           # enable OpenAI embeddings/chat if OPENAI_API_KEY is set
+openai>=1.0.0           # enable OpenAI embeddings/chat if OPENAI_API_KEY is set
 # transformers>=4.44      # local HF embeddings (heavy)
 # torch>=2.3              # required by transformers for local models

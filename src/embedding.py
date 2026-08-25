@@ -1,4 +1,5 @@
 import os
+import logging
 from typing import List, Optional
 
 import numpy as np
@@ -16,15 +17,27 @@ except Exception:
     AutoModel = None  # type: ignore
     torch = None  # type: ignore
 
+# OpenAI v1.0+ API
 try:
-    import openai  # type: ignore
+    from openai import OpenAI  # type: ignore
+    OPENAI_AVAILABLE = True
 except Exception:
-    openai = None  # type: ignore
+    OpenAI = None  # type: ignore
+    OPENAI_AVAILABLE = False
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if openai is not None and OPENAI_API_KEY:
-    openai.api_key = OPENAI_API_KEY
+
+logger = logging.getLogger(__name__)
+
+# Initialize OpenAI client (v1.0+ API)
+_openai_client = None
+if OPENAI_AVAILABLE and OPENAI_API_KEY:
+    try:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        logger.warning(f"Failed to initialize OpenAI client: {e}")
+        _openai_client = None
 
 
 def embed_textual_metadata(content: str, target_dim: Optional[int] = None) -> List[float]:
@@ -35,9 +48,9 @@ def embed_textual_metadata(content: str, target_dim: Optional[int] = None) -> Li
     # Prefer OpenAI if available and key is set. Use only if target_dim is unspecified
     # or matches the known OpenAI embedding dimension for the requested model.
     # text-embedding-ada-002 returns 1536-dim vectors.
-    if openai is not None and OPENAI_API_KEY and (target_dim is None or target_dim == 1536):
+    if _openai_client is not None and OPENAI_API_KEY and (target_dim is None or target_dim == 1536):
         try:
-            response = openai.Embedding.create(
+            response = _openai_client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=content,
             )
@@ -45,7 +58,7 @@ def embed_textual_metadata(content: str, target_dim: Optional[int] = None) -> Li
             return list(embedding)
         except Exception as e:
             # Fall through to local embedding in degraded mode
-            print(f"OpenAI embedding failed, using fallback. Reason: {e}")
+            logger.warning(f"OpenAI embedding failed, using fallback. Reason: {e}")
     # Fallback: deterministic local embedding
     return _fallback_embed(content, dim=target_dim or 384)
 
@@ -88,7 +101,7 @@ if HF_AVAILABLE and os.getenv("DISABLE_HF", "0") != "1":
         _model = AutoModel.from_pretrained("microsoft/codebert-base")
     except Exception as e:
         # Degraded mode if models cannot be downloaded
-        print(f"Warning: Failed to load CodeBERT models, using fallback code embeddings. Reason: {e}")
+        logger.warning(f"Failed to load CodeBERT models, using fallback code embeddings. Reason: {e}")
         _tokenizer = None
         _model = None
 
@@ -116,6 +129,6 @@ def generate_code_embedding(code_snippet: str, target_dim: Optional[int] = None)
                 embedding = outputs.last_hidden_state.mean(dim=1).squeeze(0)
             return embedding.detach().cpu().numpy().tolist()  # type: ignore
         except Exception as e:
-            print(f"CodeBERT embedding failed, using fallback. Reason: {e}")
+            logger.warning(f"CodeBERT embedding failed, using fallback. Reason: {e}")
     # Fallback: use the same local embedding, default 512-dim for code unless overridden
     return _fallback_embed(code_snippet, dim=target_dim or 512)

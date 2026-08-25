@@ -1,58 +1,87 @@
-This project demonstrates a Retrieval Augmented Generation (RAG) system for answering questions about a GitHub repository. It leverages ChromaDB for efficient vector similarity search and OpenAI's embedding models for representing textual and code data.
-## Project Overview
-The system processes a GitHub repository, extracts textual and code chunks, generates embeddings for each chunk using OpenAI's `text-embedding-ada-002` and CodeBERT, and stores them in ChromaDB collections. When a user asks a question, the system retrieves the most relevant chunks based on semantic similarity, constructs a prompt incorporating the retrieved context, and uses OpenAI's `gpt-3.5-turbo` to generate an answer.
-## System Architecture
-1. **GitHub Data Parsing:** The `github_parser.py` script uses the GitHub API to retrieve files from a specified repository. It then splits the content into chunks, differentiating between textual and code files.
-2. **Embedding Generation:** The `embedding.py` script generates embeddings for both textual and code chunks. Textual embeddings are created using OpenAI's `text-embedding-ada-002`, while code embeddings are generated using CodeBERT.
-3. **ChromaDB Storage:** The `chromaDB_setup.py` script sets up two ChromaDB collections: one for textual embeddings and one for code embeddings. The embeddings and corresponding metadata are added to these collections.
-4. **Query Processing:** The `helper.ipynb` notebook contains the core logic for answering user questions. It retrieves the most similar chunks from ChromaDB, constructs a RAG prompt, and uses OpenAI's `gpt-3.5-turbo` to generate the answer.
+# RAG Repository Analyzer
+
+Retrieval-Augmented Generation system for answering natural-language questions about a GitHub repository. Indexes the repo into ChromaDB and answers via semantic search + GPT.
+
+## Architecture
+
+Two indexing pipelines sit behind a common `Pipeline` protocol (`src/pipeline.py`):
+
+- **`DefaultPipeline`** (`src/default_pipeline.py`) — fetch → chunk → embed → persist to ChromaDB. Routes queries between text and code collections at retrieval time.
+- **`LazyPipeline`** (`src/lazy_pipeline.py`) — builds an in-memory metadata index only; embeds and scores files on demand per query.
+
+`RAGService` (`src/rag_service.py`) is a thin orchestrator: it takes a `Pipeline` and owns prompt construction, the OpenAI call, and source formatting.
+
+Other modules:
+- `src/github_parser.py` — GitHub fetch + LangChain text splitting
+- `src/embedding.py` — OpenAI `text-embedding-ada-002` (text), CodeBERT (code), deterministic hash fallback when offline
+- `src/chromaDB_setup.py` — persistent ChromaDB collections
+- `src/metadata_index.py`, `src/file_selector.py`, `src/lazy_parser.py` — lazy pipeline components
+- `backend/main.py` — FastAPI REST endpoints + static frontend serving
+
+All external services degrade gracefully: GitHub unavailable → synthetic repo, OpenAI unavailable → hash embeddings, CodeBERT unavailable → fallback.
 
 ## Setup
-1. **Install Dependencies:**
-``` bash
+
+```bash
 pip install -r requirements.txt
 ```
-1. **Set API Keys:** Create a `.env` file and add your OpenAI and GitHub API keys:
-``` 
-OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-GITHUB_API_KEY="YOUR_GITHUB_API_KEY"
+
+Create `.env`:
 ```
-1. **Run the Notebook:** Execute the `helper.ipynb` notebook. This will parse the specified GitHub repository, generate embeddings, create ChromaDB collections, and allow you to ask questions.
+OPENAI_API_KEY="..."
+GITHUB_API_KEY="..."
+USE_LAZY_PIPELINE=0   # set to 1 to enable the lazy pipeline
+```
 
-## Frontend (Next.js App Router UI)
-A neo‑brutalist frontend lives in `./frontend`, built with Next.js 13+/16 App Router, TypeScript, and Tailwind CSS.
+Run the backend:
+```bash
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-Prerequisites:
-- Node.js >= 18.18.0 (Node 20+ recommended)
+## Frontend
 
-Install and run in development:
+Next.js 13+ App Router + Tailwind, configured for static export. Lives in `./frontend`. Requires Node 18.18+.
+
 ```bash
 cd frontend
 npm install
-npm run dev
-# The app will start at http://localhost:3000
+npm run dev      # http://localhost:3000
+npm run build    # static export to frontend/out
 ```
 
-Build and start production server:
+The FastAPI backend serves the static export from its root in production.
+
+## API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/index` | Index a repository |
+| POST | `/query` | Query an indexed repository |
+| GET | `/repositories` | List indexed repos |
+| GET | `/status/{repo_path}` | Repo status |
+| DELETE | `/repository/{repo_path}` | Remove indexed repo |
+| GET | `/health` | Health check |
+
+## Tests
+
 ```bash
-cd frontend
-npm run build
-npm start
-# Serves the built app on http://localhost:3000
+pytest tests/                          # unit + integration, runs offline
+python test_api.py                     # manual HTTP probe (requires running server)
+python test_analyze_and_query.py       # manual end-to-end probe
 ```
 
-Notes:
-- Tailwind is preconfigured (see `frontend/tailwind.config.ts` and `frontend/app/globals.css`).
-- UI components are under `frontend/components/ui` (Button, Input).
-- Main page with input → processing → dashboard/chat flow is at `frontend/app/page.tsx`.
+`tests/test_default_pipeline.py` and `tests/test_lazy_pipeline.py` cover each pipeline in isolation. `tests/test_rag_service_integration.py` exercises both pipelines through `RAGService` end-to-end.
 
-## Usage
-The `helper.ipynb` notebook provides a simple interface for querying the system. You can modify the `query` variable to test different questions. The system will return the AI's response based on the context found in the repository.
-## Future Improvements
-- More sophisticated chunk splitting strategies.
-- Improved prompt engineering for better AI responses.
-- Integration with other knowledge sources.
-- Enhanced error handling and logging.
+## Roadmap
+
+- [ ] Embedding cache (Redis or local file) to skip repeat API calls
+- [ ] Semantic chunking via tree-sitter for code-aware boundaries
+- [ ] Hybrid retrieval: BM25 alongside vector similarity
+- [ ] Cross-encoder re-ranking of retrieved chunks
+- [ ] Multi-turn conversation memory persistence
+- [ ] Observability: structured logs, tracing, error monitoring
+- [ ] GitLab / Bitbucket / on-prem repository providers
 
 ## Contributing
-Contributions are welcome! Please open an issue or submit a pull request.
+
+Issues and pull requests welcome.
